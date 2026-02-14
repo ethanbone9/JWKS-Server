@@ -154,3 +154,35 @@ func verifyToken(t *testing.T, tokenStr string, expectedKID string, pub *rsa.Pub
 		t.Fatalf("expected token valid")
 	}
 }
+
+func TestJWKSMethodNotAllowed(t *testing.T) {
+	ks, srv := newTestServer(t)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/.well-known/jwks.json", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", resp.StatusCode)
+	}
+}
+
+func TestAuthMethodNotAllowed(t *testing.T) {
+	ks, srv := newTestServer(t)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/auth", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", resp.StatusCode)
+	}
+}
