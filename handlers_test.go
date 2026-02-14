@@ -156,7 +156,7 @@ func verifyToken(t *testing.T, tokenStr string, expectedKID string, pub *rsa.Pub
 }
 
 func TestJWKSMethodNotAllowed(t *testing.T) {
-	ks, srv := newTestServer(t)
+	_, srv := newTestServer(t)
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/.well-known/jwks.json", nil)
@@ -172,7 +172,7 @@ func TestJWKSMethodNotAllowed(t *testing.T) {
 }
 
 func TestAuthMethodNotAllowed(t *testing.T) {
-	ks, srv := newTestServer(t)
+	_, srv := newTestServer(t)
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/auth", nil)
