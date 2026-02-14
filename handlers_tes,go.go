@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rsa"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -67,9 +68,11 @@ func TestAuthIssuesActiveJWT(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	buf := new(strings.Builder)
-	_, _ = buf.ReadFrom(resp.Body)
-	tokenStr := strings.TrimSpace(buf.String())
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	tokenStr := strings.TrimSpace(string(b))
 	if tokenStr == "" {
 		t.Fatal("empty token")
 	}
