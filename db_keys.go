@@ -6,7 +6,12 @@ import (
 )
 
 func InsertKey(db *sql.DB, key []byte, exp int64) {
-	_, err := db.Exec(`INSERT INTO keys(key, exp) VALUES(?, ?)`, key, exp)
+	encryptedKey, err := EncryptPrivateKey(key)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = db.Exec(`INSERT INTO keys(key, exp) VALUES(?, ?)`, encryptedKey, exp)
 	if err != nil {
 		log.Fatal(err)
 	}

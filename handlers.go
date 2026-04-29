@@ -17,6 +17,7 @@ func RegisterRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("/.well-known/jwks.json", jwksHandler(db))
 	mux.HandleFunc("/jwks", jwksHandler(db))
 	mux.HandleFunc("/auth", authHandler(db))
+	mux.HandleFunc("/register", registerHandler(db))
 }
 
 func jwksHandler(db *sql.DB) http.HandlerFunc {
@@ -44,7 +45,13 @@ func jwksHandler(db *sql.DB) http.HandlerFunc {
 				return
 			}
 
-			privKey, err := DecodePEMToPrivateKey(pemKey)
+			decryptedPEM, err := DecryptPrivateKey(pemKey)
+			if err != nil {
+				http.Error(w, "failed to decrypt key", http.StatusInternalServerError)
+				return
+			}
+
+			privKey, err := DecodePEMToPrivateKey(decryptedPEM)
 			if err != nil {
 				http.Error(w, "failed to decode key", http.StatusInternalServerError)
 				return
@@ -68,52 +75,112 @@ func authHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		if !authLimiter.allow(r.RemoteAddr) {
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+
 		issueExpired := false
 		if _, ok := r.URL.Query()["expired"]; ok {
 			issueExpired = true
 		}
 
-		var (
-			kid    int
-			keyPEM []byte
-			exp    int64
-		)
+		var kid int
+		var keyPEM []byte
+		var exp int64
+		var err error
 
 		if issueExpired {
-			err := db.QueryRow(
-				`SELECT kid, key, exp FROM keys WHERE exp <= ? LIMIT 1`,
+			err = db.QueryRow(
+				`SELECT kid, key, exp FROM keys WHERE exp <= ? ORDER BY exp DESC LIMIT 1`,
 				time.Now().Unix(),
 			).Scan(&kid, &keyPEM, &exp)
-			if err != nil {
-				http.Error(w, "no expired signing key available", http.StatusInternalServerError)
-				return
-			}
 		} else {
-			err := db.QueryRow(
-				`SELECT kid, key, exp FROM keys WHERE exp > ? LIMIT 1`,
+			err = db.QueryRow(
+				`SELECT kid, key, exp FROM keys WHERE exp > ? ORDER BY exp DESC LIMIT 1`,
 				time.Now().Unix(),
 			).Scan(&kid, &keyPEM, &exp)
-			if err != nil {
-				http.Error(w, "no unexpired signing key available", http.StatusInternalServerError)
-				return
-			}
 		}
 
-		privKey, err := DecodePEMToPrivateKey(keyPEM)
 		if err != nil {
-			http.Error(w, "failed to decode private key", http.StatusInternalServerError)
+			http.Error(w, "no signing key available", http.StatusInternalServerError)
+			return
+		}
+
+		decryptedPEM, err := DecryptPrivateKey(keyPEM)
+		if err != nil {
+			http.Error(w, "failed to decrypt private key: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		privKey, err := DecodePEMToPrivateKey(decryptedPEM)
+		if err != nil {
+			http.Error(w, "failed to decode private key: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		tokenStr, err := signJWT(privKey, kid, exp, issueExpired)
 		if err != nil {
-			http.Error(w, "failed to issue token", http.StatusInternalServerError)
+			http.Error(w, "failed to issue token: "+err.Error(), http.StatusInternalServerError)
 			return
+		}
+
+		_, _ = db.Exec(
+			`INSERT INTO auth_logs(request_ip) VALUES(?)`,
+			r.RemoteAddr,
+		)
+
+		var userID int
+		err = db.QueryRow(
+			`SELECT id FROM users WHERE username = ?`,
+			"userABC",
+		).Scan(&userID)
+
+		if err == nil {
+			_, _ = db.Exec(
+				`INSERT INTO auth_logs(request_ip, user_id) VALUES(?, ?)`,
+				r.RemoteAddr,
+				userID,
+			)
 		}
 
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(tokenStr))
+	}
+}
+
+func registerHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req RegisterRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		password := generatePassword()
+
+		passwordHash, err := hashPassword(password)
+		if err != nil {
+			http.Error(w, "failed to hash password", http.StatusInternalServerError)
+			return
+		}
+
+		if err := insertUser(db, req.Username, req.Email, passwordHash); err != nil {
+			http.Error(w, "failed to register user", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(RegisterResponse{
+			Password: password,
+		})
 	}
 }
 

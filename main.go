@@ -10,28 +10,35 @@ import (
 )
 
 func seedKeys(db *sql.DB) {
-	var count int
-	err := db.QueryRow(`SELECT COUNT(*) FROM keys`).Scan(&count)
+	now := time.Now().Unix()
+
+	var validCount int
+	err := db.QueryRow(`SELECT COUNT(*) FROM keys WHERE exp > ?`, now).Scan(&validCount)
 	if err != nil {
-		log.Fatalf("failed to count keys: %v", err)
+		log.Fatalf("failed to count valid keys: %v", err)
 	}
 
-	if count > 0 {
-		return
-	}
-
-	validKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	var expiredCount int
+	err = db.QueryRow(`SELECT COUNT(*) FROM keys WHERE exp <= ?`, now).Scan(&expiredCount)
 	if err != nil {
-		log.Fatalf("failed to generate valid key: %v", err)
+		log.Fatalf("failed to count expired keys: %v", err)
 	}
 
-	expiredKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		log.Fatalf("failed to generate expired key: %v", err)
+	if validCount == 0 {
+		validKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			log.Fatalf("failed to generate valid key: %v", err)
+		}
+		InsertKey(db, EncodePrivateKeyToPEM(validKey), time.Now().Add(1*time.Hour).Unix())
 	}
 
-	InsertKey(db, EncodePrivateKeyToPEM(validKey), time.Now().Add(1*time.Hour).Unix())
-	InsertKey(db, EncodePrivateKeyToPEM(expiredKey), time.Now().Add(-1*time.Hour).Unix())
+	if expiredCount == 0 {
+		expiredKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			log.Fatalf("failed to generate expired key: %v", err)
+		}
+		InsertKey(db, EncodePrivateKeyToPEM(expiredKey), time.Now().Add(-1*time.Hour).Unix())
+	}
 }
 
 func main() {
